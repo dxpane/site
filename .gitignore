@@ -189,3 +189,5 @@ blob-report/
 test-results/
 playwright-report/
 blob-report/
+.serve/
+next-env.d.ts
