@@ -1,13 +1,14 @@
 name: claude
 
-# Claude Code as PR reviewer (automatic, one pass per PR) and on-demand helper (@claude in comments).
+# Claude Code as PR reviewer (automatic: one pass when a PR into dev opens, to catch problems before they merge)
+# and on-demand helper (@claude in comments, any PR or issue).
 # Runs on Begli's Claude subscription: the token lives only in GCP Secret Manager (infra-claude-code-oauth-token,
 # infra/CI secret layer) and is read per run via keyless Workload Identity Federation (infra/terraform/ci).
 # Comment-only: no merges, no pushes to dev/master.
 on:
   pull_request:
     types: [opened, ready_for_review, reopened]
-    branches: [dev, master]
+    branches: [dev]
   issue_comment:
     types: [created]
   pull_request_review_comment:
