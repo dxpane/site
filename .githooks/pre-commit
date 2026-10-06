@@ -1,0 +1,11 @@
+#!/bin/sh
+# Block commits that contain secrets (gitleaks on the staged changes).
+# Enable once per clone: git config core.hooksPath .githooks   ·   install: brew install gitleaks
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks git --pre-commit --staged --no-banner --redact --verbose || {
+    echo "gitleaks: possible secret in the staged changes — remove it (or, if it is a reviewed false positive, add its fingerprint to .gitleaksignore)"
+    exit 1
+  }
+else
+  echo "pre-commit: gitleaks not installed (brew install gitleaks) — secret scan skipped"
+fi
