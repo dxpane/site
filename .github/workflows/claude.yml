@@ -4,7 +4,8 @@ name: claude
 # and on-demand helper (@claude in comments, any PR or issue).
 # Runs on Begli's Claude subscription: the token lives only in GCP Secret Manager (infra-claude-code-oauth-token,
 # infra/CI secret layer) and is read per run via keyless Workload Identity Federation (infra/terraform/ci).
-# Comment-only: no merges, no pushes to dev/master.
+# Comment-only: no merges, no pushes to dev/master. @claude only for owner/members/collaborators: on a public repo a
+# stranger's comment must not even start the job (it logs into GCP and fetches the token before anything else).
 on:
   pull_request:
     types: [opened, ready_for_review, reopened]
@@ -29,7 +30,8 @@ jobs:
     if: >-
       vars.CI_WIF_PROVIDER != '' && (
         (github.event_name == 'pull_request' && !github.event.pull_request.draft && github.event.pull_request.user.type != 'Bot') ||
-        (github.event_name != 'pull_request' && contains(github.event.comment.body, '@claude') && github.event.comment.user.type != 'Bot')
+        (github.event_name != 'pull_request' && contains(github.event.comment.body, '@claude') &&
+         contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
       )
     runs-on: ubuntu-latest
     timeout-minutes: 20
