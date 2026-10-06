@@ -52,6 +52,20 @@ jobs:
           claude_code_oauth_token: ${{ steps.secrets.outputs.claude }}
           github_token: ${{ github.token }}
           use_sticky_comment: true
-          # automatic reviews use Sonnet to spare the subscription's limits; @claude uses the default model
-          claude_args: ${{ github.event_name == 'pull_request' && '--model claude-sonnet-5-5' || '' }}
-          prompt: ${{ github.event_name == 'pull_request' && 'Review this pull request. Read REVIEW.md (and CLAUDE.md if present) for what matters in this repository. Report only real problems - bugs, security issues (secrets, injection, auth), data loss, broken contracts, missing tests for changed behaviour - ranked by severity, each with file:line and a concrete fix. Skip style nits. If nothing is wrong, say so in one line. Do not push commits.' || '' }}
+          # Automatic review (PR opened into dev): Sonnet to spare the subscription's limits; findings as inline comments
+          # on the exact lines + one summary comment. Tools limited to commenting and reading the PR (no push/merge).
+          claude_args: >-
+            ${{ github.event_name == 'pull_request'
+                && '--model claude-sonnet-5-5 --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"'
+                || '' }}
+          prompt: >-
+            ${{ github.event_name == 'pull_request' && format('REPO: {0} PR NUMBER: {1}
+
+            Review this pull request. Read REVIEW.md (and CLAUDE.md if present) for what matters in this repository.
+            Report only real problems: bugs, security issues (secrets, injection, auth), data loss, broken contracts,
+            missing tests for changed behaviour. Skip style nits.
+
+            For each problem, post an inline comment on the exact line with
+            mcp__github_inline_comment__create_inline_comment (confirmed: true): severity, what breaks, concrete fix.
+            Then post ONE summary with gh pr comment: findings ranked by severity (one line each), or a single line
+            saying nothing is wrong. Only post GitHub comments; do not push commits.', github.repository, github.event.pull_request.number) || '' }}
