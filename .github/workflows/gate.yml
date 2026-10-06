@@ -35,7 +35,7 @@ jobs:
           REPO: ${{ github.repository }}
         shell: python
         run: |
-          import json, os, subprocess
+          import json, os, re, subprocess
 
           repo = os.environ["REPO"]
           def gh(path, *args):
@@ -46,6 +46,8 @@ jobs:
 
           IGNORED = {"gate", "claude"}  # the gate itself; the review counts through its verdict, not its job status
           REVIEWERS = {"github-actions[bot]", "claude[bot]"}  # only the review bot's comments carry a verdict
+          # "VERDICT: PASS <sha>" — tolerant of markdown (`code`, **bold**) and trailing punctuation
+          VERDICT = re.compile(r"VERDICT:\W*(PASS|BLOCK)\W+([0-9a-fA-F]{7,40})", re.IGNORECASE)
 
           def verdict_for(number, sha):
               """Latest verdict that names this exact head commit; None if the head has not been reviewed."""
@@ -53,10 +55,9 @@ jobs:
               for c in gh_all(f"repos/{repo}/issues/{number}/comments?per_page=100"):
                   if c["user"]["login"] not in REVIEWERS:
                       continue
-                  for line in c["body"].splitlines():
-                      parts = line.strip().strip("`*").split()
-                      if len(parts) >= 3 and parts[0] == "VERDICT:" and len(parts[2]) >= 7 and sha.startswith(parts[2].lower()):
-                          found = parts[1].upper()
+                  for m in VERDICT.finditer(c["body"]):
+                      if sha.startswith(m.group(2).lower()):
+                          found = m.group(1).upper()
               return found
 
           for pr in gh_all(f"repos/{repo}/pulls?state=open&per_page=100"):
@@ -85,8 +86,12 @@ jobs:
               except Exception as e:  # one broken PR must not stop the others
                   state, text = "error", f"gate could not evaluate: {type(e).__name__}"
 
-              subprocess.check_call(["gh", "api", "-X", "POST", f"repos/{repo}/statuses/{sha}",
-                                     "-f", f"state={state}", "-f", "context=dxpane/gate",
-                                     "-f", f"description={text[:140]}", "-f", f"target_url={pr['html_url']}"],
-                                    stdout=subprocess.DEVNULL)
+              try:  # a failed status write (e.g. a fork PR) must not stop the remaining PRs
+                  subprocess.check_call(["gh", "api", "-X", "POST", f"repos/{repo}/statuses/{sha}",
+                                         "-f", f"state={state}", "-f", "context=dxpane/gate",
+                                         "-f", f"description={text[:140]}", "-f", f"target_url={pr['html_url']}"],
+                                        stdout=subprocess.DEVNULL)
+              except subprocess.CalledProcessError as e:
+                  print(f"#{number}: could not set status ({e.returncode})")
+                  continue
               print(f"#{number} ({base}) {sha[:7]}: {state} - {text}")
