@@ -46,8 +46,9 @@ jobs:
 
           IGNORED = {"gate", "claude"}  # the gate itself; the review counts through its verdict, not its job status
           REVIEWERS = {"github-actions[bot]", "claude[bot]"}  # only the review bot's comments carry a verdict
-          # "VERDICT: PASS <sha>" — tolerant of markdown (`code`, **bold**) and trailing punctuation
-          VERDICT = re.compile(r"VERDICT:\W*(PASS|BLOCK)\W+([0-9a-fA-F]{7,40})", re.IGNORECASE)
+          # A verdict is a line of its own: "VERDICT: PASS <sha>" (upper-case; markdown `code`/**bold** around it is fine).
+          # Mentions inside prose or quotes don't count; within one comment the last verdict line wins.
+          VERDICT = re.compile(r"^[\s`*]*VERDICT:\s*\**(PASS|BLOCK)\**\s+`?([0-9a-f]{7,40})`?[\s`*.]*$", re.MULTILINE)
 
           def verdict_for(number, sha):
               """Latest verdict that names this exact head commit; None if the head has not been reviewed."""
@@ -55,9 +56,9 @@ jobs:
               for c in gh_all(f"repos/{repo}/issues/{number}/comments?per_page=100"):
                   if c["user"]["login"] not in REVIEWERS:
                       continue
-                  for m in VERDICT.finditer(c["body"]):
-                      if sha.startswith(m.group(2).lower()):
-                          found = m.group(1).upper()
+                  matches = VERDICT.findall(c["body"])
+                  if matches and sha.startswith(matches[-1][1]):
+                      found = matches[-1][0]  # comments are oldest-first, so the newest verdict for this head wins
               return found
 
           for pr in gh_all(f"repos/{repo}/pulls?state=open&per_page=100"):
@@ -75,8 +76,8 @@ jobs:
 
                   if failed:
                       state, text = "failure", "failed: " + ", ".join(failed)
-                  elif running or not checks:
-                      state, text = "pending", "waiting for: " + (", ".join(running) or "checks to start")
+                  elif running:  # no checks at all (e.g. docs) means nothing failed; the verdict decides
+                      state, text = "pending", "waiting for: " + ", ".join(running)
                   elif base == "dev" and verdict is None:
                       state, text = "pending", f"no Claude review of {sha[:7]} yet (comment: @claude review again)"
                   elif base == "dev" and verdict != "PASS":
