@@ -1,0 +1,33 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      # build under the same sub-path GitHub Pages uses, and test it there
+      - run: npm run build
+        env:
+          PAGES_BASE_PATH: /site
+      - run: npx playwright install --with-deps chromium webkit
+      - run: npm test
+        env:
+          BASE_PATH: /site
