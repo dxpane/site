@@ -1,8 +1,8 @@
 name: gate
 
 # Merge gate: sets the commit status `dxpane/gate` on the head commit of every open PR.
-#   green   — all checks on the head commit passed, and (PRs into dev) the latest Claude review verdict is PASS and
-#             newer than the head commit
+#   green   — all checks on the head commit passed, and (PRs into dev) a Claude review verdict for exactly that commit
+#             says PASS ("VERDICT: PASS <head sha>" in a comment by the review bot)
 #   pending — checks still running, or no current review yet (comment "@claude review again" after new pushes)
 #   red     — a check failed, or the review said VERDICT: BLOCK
 # Re-evaluates when a PR changes and whenever a check workflow finishes. GitHub enforces it only where a ruleset
@@ -40,39 +40,50 @@ jobs:
           repo = os.environ["REPO"]
           def gh(path, *args):
               return json.loads(subprocess.check_output(["gh", "api", path, *args]))
+          def gh_all(path):  # paginated list endpoints
+              out = subprocess.check_output(["gh", "api", "--paginate", "--slurp", path])
+              return [item for page in json.loads(out) for item in page]
 
           IGNORED = {"gate", "claude"}  # the gate itself; the review counts through its verdict, not its job status
-          for pr in gh(f"repos/{repo}/pulls?state=open&per_page=50"):
+          REVIEWERS = {"github-actions[bot]", "claude[bot]"}  # only the review bot's comments carry a verdict
+
+          def verdict_for(number, sha):
+              """Latest verdict that names this exact head commit; None if the head has not been reviewed."""
+              found = None
+              for c in gh_all(f"repos/{repo}/issues/{number}/comments?per_page=100"):
+                  if c["user"]["login"] not in REVIEWERS:
+                      continue
+                  for line in c["body"].splitlines():
+                      parts = line.strip().strip("`*").split()
+                      if len(parts) >= 3 and parts[0] == "VERDICT:" and len(parts[2]) >= 7 and sha.startswith(parts[2].lower()):
+                          found = parts[1].upper()
+              return found
+
+          for pr in gh_all(f"repos/{repo}/pulls?state=open&per_page=100"):
               number, sha, base = pr["number"], pr["head"]["sha"], pr["base"]["ref"]
-              latest = {}
-              for run in sorted(gh(f"repos/{repo}/commits/{sha}/check-runs?per_page=100")["check_runs"],
-                                key=lambda r: r["started_at"] or ""):
-                  latest[run["name"]] = run
-              checks = {n: r for n, r in latest.items() if n not in IGNORED}
-              running = sorted(n for n, r in checks.items() if r["status"] != "completed")
-              failed = sorted(n for n, r in checks.items()
-                              if r["status"] == "completed" and r["conclusion"] not in ("success", "skipped", "neutral"))
+              try:
+                  latest = {}
+                  for run in sorted(gh(f"repos/{repo}/commits/{sha}/check-runs?per_page=100")["check_runs"],
+                                    key=lambda r: r["started_at"] or ""):
+                      latest[run["name"]] = run
+                  checks = {n: r for n, r in latest.items() if n not in IGNORED}
+                  running = sorted(n for n, r in checks.items() if r["status"] != "completed")
+                  failed = sorted(n for n, r in checks.items()
+                                  if r["status"] == "completed" and r["conclusion"] not in ("success", "skipped", "neutral"))
+                  verdict = verdict_for(number, sha) if base == "dev" else None
 
-              verdict = None
-              if base == "dev":
-                  pushed = gh(f"repos/{repo}/commits/{sha}")["commit"]["committer"]["date"]
-                  for c in gh(f"repos/{repo}/issues/{number}/comments?per_page=100"):
-                      if c["user"]["type"] == "Bot" and c["updated_at"] >= pushed:
-                          for line in reversed(c["body"].splitlines()):
-                              if line.strip().startswith("VERDICT:"):
-                                  verdict = line.split(":", 1)[1].strip().split()[0].upper()
-                                  break
-
-              if failed:
-                  state, text = "failure", "failed: " + ", ".join(failed)
-              elif running or not checks:
-                  state, text = "pending", "waiting for: " + (", ".join(running) or "checks to start")
-              elif base == "dev" and verdict is None:
-                  state, text = "pending", "waiting for a current Claude review (comment: @claude review again)"
-              elif base == "dev" and verdict != "PASS":
-                  state, text = "failure", "Claude review: BLOCK - fix, push, then @claude review again"
-              else:
-                  state, text = "success", "checks green" + (", Claude review PASS" if base == "dev" else "")
+                  if failed:
+                      state, text = "failure", "failed: " + ", ".join(failed)
+                  elif running or not checks:
+                      state, text = "pending", "waiting for: " + (", ".join(running) or "checks to start")
+                  elif base == "dev" and verdict is None:
+                      state, text = "pending", f"no Claude review of {sha[:7]} yet (comment: @claude review again)"
+                  elif base == "dev" and verdict != "PASS":
+                      state, text = "failure", f"Claude review of {sha[:7]}: {verdict} - fix, push, @claude review again"
+                  else:
+                      state, text = "success", "checks green" + (f", Claude review PASS for {sha[:7]}" if base == "dev" else "")
+              except Exception as e:  # one broken PR must not stop the others
+                  state, text = "error", f"gate could not evaluate: {type(e).__name__}"
 
               subprocess.check_call(["gh", "api", "-X", "POST", f"repos/{repo}/statuses/{sha}",
                                      "-f", f"state={state}", "-f", "context=dxpane/gate",
