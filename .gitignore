@@ -1,0 +1,191 @@
+# dxpane/site — ignore rules (shared baseline across dxpane repos)
+# Stacks: .NET 10 · Node/React/Vite · Swift/Xcode · Python tooling · Terraform · Remotion
+# Rule of thumb: secrets, generated output, local state and editor files never enter git.
+# Note: git has no trailing comments — keep comments on their own lines. macOS is case-insensitive:
+# avoid patterns like 'Packages/' that would also hide our 'packages/'.
+
+# ─── Secrets & credentials (never commit; use Secret Manager / Keychain / CI secrets) ───
+.env
+.env.*
+!.env.example
+!**/.env.example
+*.pem
+*.key
+# App Store Server API / Sign in with Apple / APNs keys
+*.p8
+*.p12
+*.pfx
+*.cer
+*.mobileprovision
+*.provisionprofile
+*.keystore
+*.jks
+**/secrets/
+**/*secret*.json
+**/*credentials*.json
+service-account*.json
+*-sa-key.json
+.netrc
+.npmrc.local
+appsettings.*.local.json
+**/Properties/launchSettings.local.json
+GoogleService-Info.plist
+
+# ─── OS ───
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ─── Editors / IDEs ───
+.vs/
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+*.code-workspace
+*.sublime-*
+.fleet/
+.history/
+
+# ─── .NET ───
+bin/
+obj/
+*.user
+*.userosscache
+*.suo
+*.rsuser
+*.dbmdl
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+*.trx
+*.coverage
+*.coveragexml
+coverage*.json
+coverage*.xml
+coverage*.info
+TestResults/
+BenchmarkDotNet.Artifacts/
+*.nupkg
+*.snupkg
+.nuget/packages/
+project.lock.json
+artifacts/
+publish/
+*.binlog
+
+# ─── Node / TypeScript / Vite / Remotion ───
+node_modules/
+dist/
+build/
+out/
+.vite/
+.cache/
+.parcel-cache/
+.turbo/
+.next/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+.eslintcache
+.stylelintcache
+coverage/
+.nyc_output/
+storybook-static/
+
+# ─── Swift / Xcode / iOS ───
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+.build/
+.swiftpm/
+Package.resolved.orig
+Pods/
+Carthage/Build/
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output/
+fastlane/README.md
+iOSInjectionProject/
+
+# ─── Python tooling (spikes, scripts) ───
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# ─── Terraform (commit .terraform.lock.hcl; never state or real tfvars) ───
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+*.tfplan
+
+# ─── Logs, temp, local data ───
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.bak
+*.pid
+
+# ─── Media produced by local runs (rendered scenes, chunks, day files) ───
+**/data/scenes/
+**/data/public/
+*.mp4
+*.mkv
+*.mov
+!docs/**/*.mp4
+
+# ─── Project-specific ───
+# agent work ledgers (local only)
+.superpowers/
+.claude/settings.local.json
+
+# ─── Playwright ───
+test-results/
+playwright-report/
+blob-report/
+
+# ─── Playwright ───
+test-results/
+playwright-report/
+blob-report/
