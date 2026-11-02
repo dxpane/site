@@ -53,25 +53,23 @@ jobs:
     env:
       CI_SA: ${{ vars.CI_PAGES_TEST_DEPLOY_SA }}
     steps:
-      - name: Skip until infra is applied
+      - name: Require the test deploy identity
         if: env.CI_SA == ''
-        run: echo "::notice::vars.CI_PAGES_TEST_DEPLOY_SA is empty (infra ci not applied), skipping the test deploy"
+        run: |
+          echo "::error::vars.CI_PAGES_TEST_DEPLOY_SA is empty: the infra ci apply must set it on this repo"
+          exit 1
       - uses: actions/download-artifact@v4
-        if: env.CI_SA != ''
         with:
           name: out
           path: out
       - uses: actions/setup-node@v7
-        if: env.CI_SA != ''
         with:
           node-version: 26
       - uses: google-github-actions/auth@v3
-        if: env.CI_SA != ''
         with:
           workload_identity_provider: ${{ vars.CI_WIF_PROVIDER }}
           service_account: ${{ vars.CI_PAGES_TEST_DEPLOY_SA }}
       - id: secrets
-        if: env.CI_SA != ''
         uses: google-github-actions/get-secretmanager-secrets@v3
         with:
           secrets: |-
@@ -79,32 +77,36 @@ jobs:
             access_id:dxpane/dxpane-test-access-client-id
             access_secret:dxpane/dxpane-test-access-client-secret
       - name: Deploy to Pages
-        if: env.CI_SA != ''
         env:
           CLOUDFLARE_API_TOKEN: ${{ steps.secrets.outputs.token }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CF_ACCOUNT_ID }}
         run: npx --yes wrangler@4.156.0 pages deploy out --project-name dxpane-site-test --branch dev --commit-hash "$GITHUB_SHA"
       - name: Smoke check
-        if: env.CI_SA != ''
         env:
           ACCESS_ID: ${{ steps.secrets.outputs.access_id }}
           ACCESS_SECRET: ${{ steps.secrets.outputs.access_secret }}
         run: |
           set -euo pipefail
-          # 1. Without headers both hosts must redirect to Cloudflare Access.
-          for host in site-test.dxpane.com dxpane-site-test.pages.dev; do
-            for i in 1 2 3 4 5 6; do
-              out=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "https://$host/") || out="000 "
-              case "$out" in 302\ https://*.cloudflareaccess.com/*) break ;; esac
-              [ "$i" = 6 ] && { echo "::error::$host is not protected by Access (got ${out%% *})"; exit 1; }
-              sleep 10
-            done
+          pages=dxpane-site-test.pages.dev
+          custom=site-test.dxpane.com
+          # 1. Without credentials the pages.dev host must redirect to Cloudflare Access.
+          for i in 1 2 3 4 5 6; do
+            out=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "https://$pages/") || out="000 "
+            case "$out" in 302\ https://*.cloudflareaccess.com/*) break ;; esac
+            [ "$i" = 6 ] && { echo "::error::$pages is not protected by Access (got ${out%% *})"; exit 1; }
+            sleep 10
           done
-          # 2. With the service token, /version.txt must be this commit (headers via a config file, never echoed).
+          # 2. Custom host: GitHub runner IPs get a Cloudflare managed challenge there, so accept an Access redirect
+          #    or a challenge; fail only on resolve/TLS errors or anything else.
+          out=$(curl -s -o /dev/null -D - -w '\n%{http_code} %{redirect_url}' "https://$custom/") || { echo "::error::$custom did not resolve or TLS failed"; exit 1; }
+          last=$(printf '%s\n' "$out" | tail -n 1)
+          if printf '%s\n' "$out" | grep -qi '^cf-mitigated: *challenge'; then echo "$custom: Cloudflare challenge (accepted)"
+          else case "$last" in 302\ https://*.cloudflareaccess.com/*) echo "$custom: Access redirect" ;; *) echo "::error::$custom unexpected response (${last%% *})"; exit 1 ;; esac; fi
+          # 3. With the service token (pages.dev only), /version.txt must be this commit. Headers via a config file, never echoed.
           cfg=$(mktemp)
           printf 'header = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$ACCESS_ID" "$ACCESS_SECRET" > "$cfg"
           for i in 1 2 3 4 5 6; do
-            body=$(curl -s -K "$cfg" -w '\n%{http_code}' https://site-test.dxpane.com/version.txt) || body=$'\n000'
+            body=$(curl -s -K "$cfg" -w '\n%{http_code}' "https://$pages/version.txt") || body=$'\n000'
             code=${body##*$'\n'}; text=$(printf '%s' "${body%$'\n'*}" | tr -d '[:space:]')
             if [ "$code" = 200 ] && [ "$text" = "$GITHUB_SHA" ]; then rm -f "$cfg"; echo "smoke ok"; exit 0; fi
             sleep 10
