@@ -1,0 +1,116 @@
+name: deploy
+
+# Test: every push to dev publishes the static export to the Cloudflare Pages project dxpane-site-test
+# (https://site-test.dxpane.com, behind Cloudflare Access). Prod is unchanged: pages.yml on master -> GitHub Pages.
+# The file name is part of the identity binding: gha-pages-test-deploy accepts only deploy.yml@refs/heads/dev.
+# `build` has no cloud identity; `deploy` runs no repo code, it only uploads the built artifact.
+# The repo is public: never echo secrets or Access headers.
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: deploy-test
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+      - run: npm ci
+      # served at the host root, so no base path
+      - run: npm run build
+        env:
+          PAGES_BASE_PATH: ""
+      - run: echo "$GITHUB_SHA" > out/version.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: out
+          path: out
+          retention-days: 3
+
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    environment:
+      name: test
+      url: https://site-test.dxpane.com
+    env:
+      CI_SA: ${{ vars.CI_PAGES_TEST_DEPLOY_SA }}
+    steps:
+      - name: Require the test deploy identity
+        if: env.CI_SA == ''
+        run: |
+          echo "::error::vars.CI_PAGES_TEST_DEPLOY_SA is empty: the infra ci apply must set it on this repo"
+          exit 1
+      - uses: actions/download-artifact@v4
+        with:
+          name: out
+          path: out
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.CI_WIF_PROVIDER }}
+          service_account: ${{ vars.CI_PAGES_TEST_DEPLOY_SA }}
+      - id: secrets
+        uses: google-github-actions/get-secretmanager-secrets@v3
+        with:
+          secrets: |-
+            token:dxpane/infra-cloudflare-pages-test-token
+            access_id:dxpane/dxpane-test-access-client-id
+            access_secret:dxpane/dxpane-test-access-client-secret
+      - name: Deploy to Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ steps.secrets.outputs.token }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CF_ACCOUNT_ID }}
+        run: npx --yes wrangler@4.156.0 pages deploy out --project-name dxpane-site-test --branch dev --commit-hash "$GITHUB_SHA"
+      - name: Smoke check
+        env:
+          ACCESS_ID: ${{ steps.secrets.outputs.access_id }}
+          ACCESS_SECRET: ${{ steps.secrets.outputs.access_secret }}
+        run: |
+          set -euo pipefail
+          pages=dxpane-site-test.pages.dev
+          custom=site-test.dxpane.com
+          # 1. Without credentials the pages.dev host must redirect to Cloudflare Access.
+          for i in 1 2 3 4 5 6; do
+            out=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "https://$pages/") || out="000 "
+            case "$out" in 302\ https://*.cloudflareaccess.com/*) break ;; esac
+            [ "$i" = 6 ] && { echo "::error::$pages is not protected by Access (got ${out%% *})"; exit 1; }
+            sleep 10
+          done
+          # 2. Custom host: GitHub runner IPs get a Cloudflare managed challenge there, so accept an Access redirect
+          #    or a challenge; fail only on resolve/TLS errors or anything else.
+          out=$(curl -s -o /dev/null -D - -w '\n%{http_code} %{redirect_url}' "https://$custom/") || { echo "::error::$custom did not resolve or TLS failed"; exit 1; }
+          last=$(printf '%s\n' "$out" | tail -n 1)
+          if printf '%s\n' "$out" | grep -qi '^cf-mitigated: *challenge'; then echo "$custom: Cloudflare challenge (accepted)"
+          else case "$last" in 302\ https://*.cloudflareaccess.com/*) echo "$custom: Access redirect" ;; *) echo "::error::$custom unexpected response (${last%% *})"; exit 1 ;; esac; fi
+          # 3. With the service token (pages.dev only), /version.txt must be this commit. Headers via a config file, never echoed.
+          cfg=$(mktemp)
+          printf 'header = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$ACCESS_ID" "$ACCESS_SECRET" > "$cfg"
+          for i in 1 2 3 4 5 6; do
+            body=$(curl -s -K "$cfg" -w '\n%{http_code}' "https://$pages/version.txt") || body=$'\n000'
+            code=${body##*$'\n'}; text=$(printf '%s' "${body%$'\n'*}" | tr -d '[:space:]')
+            if [ "$code" = 200 ] && [ "$text" = "$GITHUB_SHA" ]; then rm -f "$cfg"; echo "smoke ok"; exit 0; fi
+            sleep 10
+          done
+          rm -f "$cfg"
+          echo "::error::version.txt did not match $GITHUB_SHA (last status $code)"
+          exit 1
