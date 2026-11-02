@@ -55,7 +55,7 @@ jobs:
     steps:
       - name: Skip until infra is applied
         if: env.CI_SA == ''
-        run: echo "::notice::vars.CI_PAGES_TEST_DEPLOY_SA is empty (infra ci not applied): skipping the test deploy"
+        run: echo "::notice::vars.CI_PAGES_TEST_DEPLOY_SA is empty (infra ci not applied), skipping the test deploy"
       - uses: actions/download-artifact@v4
         if: env.CI_SA != ''
         with:
